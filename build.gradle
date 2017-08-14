@@ -1,0 +1,21 @@
+apply plugin: 'java'
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src']
+        }
+        resources {
+            srcDirs = ['src']
+        }
+    }
+}
+
+dependencies {
+	compile fileTree(dir: 'lib', include: ['*.jar'])
+}
+
+jar {
+	from sourceSets.main.allSource
+	archiveName = "ClientHolocore.jar"
+}
