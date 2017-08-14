@@ -12,6 +12,7 @@ sourceSets {
 }
 
 dependencies {
+	compile project(':PSWGCommon')
 	compile fileTree(dir: 'lib', include: ['*.jar'])
 }
 
