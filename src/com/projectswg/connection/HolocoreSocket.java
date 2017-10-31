@@ -5,19 +5,20 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
+import java.net.StandardSocketOptions;
 import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousCloseException;
 import java.nio.channels.SocketChannel;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.projectswg.common.network.NetBuffer;
+import com.projectswg.common.network.packets.swg.holo.HoloConnectionStarted;
+import com.projectswg.common.network.packets.swg.holo.HoloConnectionStopped;
+import com.projectswg.common.network.packets.swg.holo.HoloConnectionStopped.ConnectionStoppedReason;
+import com.projectswg.common.network.packets.swg.holo.HoloSetProtocolVersion;
 import com.projectswg.connection.UDPServer.UDPPacket;
-import com.projectswg.connection.common.NetBuffer;
 import com.projectswg.connection.packets.RawPacket;
-import com.projectswg.connection.packets.holo.HoloConnectionStarted;
-import com.projectswg.connection.packets.holo.HoloConnectionStopped;
-import com.projectswg.connection.packets.holo.HoloConnectionStopped.ConnectionStoppedReason;
-import com.projectswg.connection.packets.holo.HoloSetProtocolVersion;
 
 public class HolocoreSocket {
 	
@@ -159,6 +160,7 @@ public class HolocoreSocket {
 				socket.socket().setKeepAlive(true);
 				socket.socket().setPerformancePreferences(0, 1, 2);
 				socket.socket().setTrafficClass(0x10); // Low Delay bit
+				socket.setOption(StandardSocketOptions.SO_LINGER, 1);
 				socket.configureBlocking(true);
 				socket.connect(new InetSocketAddress(addr, port));
 				if (!socket.finishConnect())
@@ -194,8 +196,9 @@ public class HolocoreSocket {
 				throw new NullPointerException("Socket cannot be null when disconnecting");
 			updateStatus(ServerConnectionStatus.DISCONNECTED, reason);
 			try {
-				if (socket.isOpen())
-					socket.write(swgProtocol.assemble(new HoloConnectionStopped(ConnectionStoppedReason.APPLICATION).encode().array()));
+				if (socket.isOpen()) {
+					socket.write(swgProtocol.assemble(new HoloConnectionStopped(ConnectionStoppedReason.APPLICATION).encode().array()).getBuffer());
+				}
 				socket.close();
 				socket = null;
 				return true;
@@ -212,7 +215,7 @@ public class HolocoreSocket {
 	 * @return TRUE on success, FALSE on failure
 	 */
 	public boolean send(byte [] raw) {
-		return sendRaw(swgProtocol.assemble(raw));
+		return sendRaw(swgProtocol.assemble(raw).getBuffer());
 	}
 	
 	/**
@@ -227,10 +230,19 @@ public class HolocoreSocket {
 			packet = swgProtocol.disassemble();
 			if (packet != null)
 				return packet;
-			readRaw(buffer);
+			readRaw(buffer, -1);
 			swgProtocol.addToBuffer(buffer);
 		} while (!isDisconnected());
 		return null;
+	}
+	
+	/**
+	 * Returns whether or not there is a packet ready to be received without blocking
+	 * @return TRUE if there is a packet, FALSE otherwise
+	 */
+	public boolean hasPacket() {
+		readRaw(buffer, 1);
+		return swgProtocol.hasPacket();
 	}
 	
 	private boolean sendRaw(ByteBuffer data) {
@@ -248,11 +260,24 @@ public class HolocoreSocket {
 		return false;
 	}
 	
-	private boolean readRaw(ByteBuffer data) {
+	/**
+	 * Reads data from the socket, returning true if there is data to read
+	 * @param data the buffer to read into
+	 * @param timeout the optional timeout for this operation, -1 for default
+	 * @return TRUE if data has been read, FALSE otherwise
+	 */
+	private boolean readRaw(ByteBuffer data, int timeout) {
 		try {
 			data.position(0);
 			data.limit(data.capacity());
+			
+			int returnTimeout = socket.socket().getSoTimeout();
+			if (timeout != returnTimeout && timeout != -1)
+				socket.socket().setSoTimeout(timeout);
 			int n = socket.read(data);
+			if (timeout != returnTimeout && timeout != -1)
+				socket.socket().setSoTimeout(returnTimeout);
+			
 			if (n < 0) {
 				disconnect(ServerConnectionChangedReason.OTHER_SIDE_TERMINATED);
 			} else {
@@ -293,7 +318,7 @@ public class HolocoreSocket {
 			updateStatus(ServerConnectionStatus.CONNECTED, ServerConnectionChangedReason.NONE);
 		} else if (crc == HoloConnectionStopped.CRC) {
 			HoloConnectionStopped packet = new HoloConnectionStopped();
-			packet.decode(ByteBuffer.wrap(raw));
+			packet.decode(NetBuffer.wrap(raw));
 			switch (packet.getReason()) {
 				case INVALID_PROTOCOL:
 					disconnect(ServerConnectionChangedReason.INVALID_PROTOCOL);

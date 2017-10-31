@@ -1,8 +1,8 @@
 package com.projectswg.connection;
 
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 
+import com.projectswg.common.network.NetBuffer;
 import com.projectswg.connection.packets.RawPacket;
 
 class SWGProtocol {
@@ -17,7 +17,7 @@ class SWGProtocol {
 		holocore.reset();
 	}
 	
-	public ByteBuffer assemble(byte [] packet) {
+	public NetBuffer assemble(byte [] packet) {
 		return holocore.assemble(packet);
 	}
 	
@@ -29,8 +29,13 @@ class SWGProtocol {
 		byte [] packet = holocore.disassemble();
 		if (packet.length < 6)
 			return null;
-		ByteBuffer data = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN);
-		return new RawPacket(data.getInt(2), packet);
+		NetBuffer data = NetBuffer.wrap(packet);
+		data.getShort();
+		return new RawPacket(data.getInt(), packet);
+	}
+	
+	public boolean hasPacket() {
+		return holocore.hasPacket();
 	}
 	
 }

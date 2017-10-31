@@ -1,10 +1,9 @@
 package com.projectswg.connection;
 
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 
-import com.projectswg.connection.common.Compression;
-import com.projectswg.connection.common.NetBufferStream;
+import com.projectswg.common.network.NetBuffer;
+import com.projectswg.common.network.NetBufferStream;
 
 class HolocoreProtocol {
 	
@@ -20,21 +19,9 @@ class HolocoreProtocol {
 		inboundStream.reset();
 	}
 	
-	public ByteBuffer assemble(byte [] raw) {
-		int decompressedLength = raw.length;
-		boolean compressed = raw.length >= 16;
-		if (compressed) {
-			byte [] compressedData = Compression.compress(raw);
-			if (compressedData.length >= raw.length)
-				compressed = false;
-			else
-				raw = compressedData;
-		}
-		ByteBuffer data = ByteBuffer.allocate(raw.length + 5).order(ByteOrder.LITTLE_ENDIAN);
-		data.put(createBitmask(compressed, true));
-		data.putShort((short) raw.length);
-		data.putShort((short) decompressedLength);
-		data.put(raw);
+	public NetBuffer assemble(byte [] raw) {
+		NetBuffer data = NetBuffer.allocate(raw.length + 4); // large array
+		data.addArrayLarge(raw);
 		data.flip();
 		return data;
 	}
@@ -42,51 +29,40 @@ class HolocoreProtocol {
 	public boolean addToBuffer(ByteBuffer data) {
 		synchronized (inboundStream) {
 			inboundStream.write(data);
-			inboundStream.mark();
-			try {
-				if (inboundStream.remaining() < 5)
-					return false;
-				inboundStream.getByte();
-				short messageLength = inboundStream.getShort();
-				inboundStream.getShort();
-				if (inboundStream.remaining() < messageLength) {
-					inboundStream.rewind();
-					return false;
-				}
-				return true;
-			} finally {
-				inboundStream.rewind();
-			}
+			return hasPacket();
 		}
 	}
 	
 	public byte [] disassemble() {
 		synchronized (inboundStream) {
 			inboundStream.mark();
-			if (inboundStream.remaining() < 5) {
+			if (inboundStream.remaining() < 4) {
 				inboundStream.rewind();
 				return EMPTY_PACKET;
-			}	
-			byte bitmask = inboundStream.getByte();
-			short messageLength = inboundStream.getShort();
-			short decompressedLength = inboundStream.getShort();
+			}
+			int messageLength = inboundStream.getInt();
 			if (inboundStream.remaining() < messageLength) {
 				inboundStream.rewind();
 				return EMPTY_PACKET;
 			}
-			byte [] message = inboundStream.getArray(messageLength);
-			if ((bitmask & 1) != 0) // Compressed
-				message = Compression.decompress(message, decompressedLength);
+			byte [] data = inboundStream.getArray(messageLength);
 			inboundStream.compact();
-			return message;
+			return data;
 		}
 	}
 	
-	private byte createBitmask(boolean compressed, boolean swg) {
-		byte bitfield = 0;
-		bitfield |= (compressed?1:0) << 0;
-		bitfield |= (swg?1:0) << 1;
-		return bitfield;
+	public boolean hasPacket() {
+		synchronized (inboundStream) {
+			inboundStream.mark();
+			try {
+				if (inboundStream.remaining() < 4)
+					return false;
+				int messageLength = inboundStream.getInt();
+				return inboundStream.remaining() >= messageLength;
+			} finally {
+				inboundStream.rewind();
+			}
+		}
 	}
 	
 }
