@@ -18,7 +18,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import com.projectswg.common.debug.Log;
 import com.projectswg.common.network.NetBuffer;
-import com.projectswg.common.network.TCPSecureSocket;
 import com.projectswg.common.network.TCPSocket;
 import com.projectswg.common.network.TCPSocket.TCPSocketCallback;
 import com.projectswg.common.network.packets.swg.holo.HoloConnectionStarted;
@@ -169,8 +168,8 @@ public class HolocoreSocket {
 	 * @throws UnrecoverableKeyException if the key cannot be recovered (e.g. the given password is wrong).
 	 */
 	public boolean connectSecure(int timeout, File keystoreFile, char [] password) throws KeyManagementException, UnrecoverableKeyException, KeyStoreException, NoSuchAlgorithmException, CertificateException, FileNotFoundException, IOException {
-		TCPSecureSocket socket = new TCPSecureSocket(address, BUFFER_SIZE);
-		socket.setupEncryption(keystoreFile, password);
+		TCPSocket socket = new TCPSocket(address, BUFFER_SIZE);
+//		socket.setupEncryption(keystoreFile, password);
 		return finishConnection(socket, timeout);
 	}
 	
