@@ -38,7 +38,8 @@ class HolocoreProtocol {
 	public byte [] disassemble() {
 		synchronized (inboundStream) {
 			inboundStream.mark();
-			if (inboundStream.remaining() < 4) {
+//			if (inboundStream.remaining() < 4) {
+			if (inboundStream.remaining() < 5) {
 				inboundStream.rewind();
 				return EMPTY_PACKET;
 			}
