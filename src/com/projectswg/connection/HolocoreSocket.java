@@ -1,21 +1,28 @@
 package com.projectswg.connection;
 
+import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
-import java.net.SocketTimeoutException;
-import java.net.StandardSocketOptions;
-import java.nio.ByteBuffer;
-import java.nio.channels.AsynchronousCloseException;
-import java.nio.channels.SocketChannel;
+import java.security.KeyManagementException;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.UnrecoverableKeyException;
+import java.security.cert.CertificateException;
 import java.util.Locale;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.projectswg.common.debug.Log;
 import com.projectswg.common.network.NetBuffer;
+import com.projectswg.common.network.TCPSecureSocket;
+import com.projectswg.common.network.TCPSocket;
+import com.projectswg.common.network.TCPSocket.TCPSocketCallback;
 import com.projectswg.common.network.packets.swg.holo.HoloConnectionStarted;
 import com.projectswg.common.network.packets.swg.holo.HoloConnectionStopped;
-import com.projectswg.common.network.packets.swg.holo.HoloConnectionStopped.ConnectionStoppedReason;
 import com.projectswg.common.network.packets.swg.holo.HoloSetProtocolVersion;
 import com.projectswg.connection.UDPServer.UDPPacket;
 import com.projectswg.connection.packets.RawPacket;
@@ -23,33 +30,25 @@ import com.projectswg.connection.packets.RawPacket;
 public class HolocoreSocket {
 	
 	private static final String PROTOCOL = "2016-04-13";
+	private static final int BUFFER_SIZE = 128 * 1024;
 	
-	private final Object socketMutex;
-	private final ByteBuffer buffer;
 	private final SWGProtocol swgProtocol;
 	private final AtomicReference<ServerConnectionStatus> status;
 	private final UDPServer udpServer;
-	private SocketChannel socket;
+	private final BlockingQueue<RawPacket> inboundQueue;
+	
+	private TCPSocket socket;
 	private StatusChangedCallback callback;
-	private InetAddress addr;
-	private int port;
+	private InetSocketAddress address;
 	
 	public HolocoreSocket(InetAddress addr, int port) {
-		this.socketMutex = new Object();
-		this.buffer = ByteBuffer.allocateDirect(128*1024);
 		this.swgProtocol = new SWGProtocol();
-		this.socket = null;
 		this.status = new AtomicReference<>(ServerConnectionStatus.DISCONNECTED);
-		UDPServer udpServer = null;
-		try {
-			udpServer = new UDPServer(0);
-		} catch (SocketException e) {
-			e.printStackTrace();
-		}
-		this.udpServer = udpServer;
+		this.udpServer = createUDPServer();
+		this.socket = null;
+		this.inboundQueue = new LinkedBlockingQueue<>();
 		this.callback = null;
-		this.addr = addr;
-		this.port = port;
+		this.address = new InetSocketAddress(addr, port);
 	}
 	
 	/**
@@ -74,8 +73,7 @@ public class HolocoreSocket {
 	 * @param port the destination port
 	 */
 	public void setRemoteAddress(InetAddress addr, int port) {
-		this.addr = addr;
-		this.port = port;
+		this.address = new InetSocketAddress(addr, port);
 	}
 	
 	/**
@@ -83,7 +81,7 @@ public class HolocoreSocket {
 	 * @return the remote address as an InetSocketAddress
 	 */
 	public InetSocketAddress getRemoteAddress() {
-		return new InetSocketAddress(addr, port);
+		return address;
 	}
 	
 	/**
@@ -132,7 +130,7 @@ public class HolocoreSocket {
 	 * @return the server status as a string
 	 */
 	public String getServerStatus(long timeout) {
-		udpServer.send(port, addr, new byte[]{1});
+		udpServer.send(address, new byte[]{1});
 		udpServer.waitForPacket(timeout);
 		UDPPacket packet = udpServer.receive();
 		if (packet == null)
@@ -150,36 +148,69 @@ public class HolocoreSocket {
 	 * @return TRUE if successful and connected, FALSE on error
 	 */
 	public boolean connect(int timeout) {
-		synchronized (socketMutex) {
-			if (!isDisconnected())
-				throw new IllegalStateException("Socket must be disconnected when attempting to connect!");
-			try {
-				swgProtocol.reset();
-				socket = SocketChannel.open();
-				updateStatus(ServerConnectionStatus.CONNECTING, ServerConnectionChangedReason.NONE);
-				socket.socket().setKeepAlive(true);
-				socket.socket().setPerformancePreferences(0, 1, 2);
-				socket.socket().setTrafficClass(0x10); // Low Delay bit
-				socket.setOption(StandardSocketOptions.SO_LINGER, 1);
-				socket.configureBlocking(true);
-				socket.connect(new InetSocketAddress(addr, port));
-				if (!socket.finishConnect())
-					return false;
-				waitForConnect(timeout);
-				return true;
-			} catch (IOException e) {
-				if (e instanceof AsynchronousCloseException) {
-					disconnect(ServerConnectionChangedReason.SOCKET_CLOSED);
-				} else if (e instanceof SocketTimeoutException) {
-					disconnect(ServerConnectionChangedReason.CONNECT_TIMEOUT);
-				} else if (e.getMessage() == null) {
-					disconnect(ServerConnectionChangedReason.UNKNOWN);
-				} else {
-					disconnect(getReason(e.getMessage()));
+		TCPSocket socket = new TCPSocket(address, BUFFER_SIZE);
+		return finishConnection(socket, timeout);
+	}
+	
+	/**
+	 * Attempts to connect to the remote server securely. This call is a blocking function that will not
+	 * return until it has either successfully connected or has failed. It starts by initializing a
+	 * TCP connection, then initializes the Holocore connection, then returns.
+	 * @param timeout the timeout for the connect call
+	 * @param keystoreFile the keystore file
+	 * @param password the password for the keystore
+	 * @return TRUE if successful and connected, FALSE on error
+	 * @throws KeyStoreException if KeyManagerFactory.init or TrustManagerFactory.init fails
+	 * @throws NoSuchAlgorithmException if the algorithm for the keystore or key manager could not be found
+	 * @throws CertificateException if any of the certificates in the keystore could not be loaded
+	 * @throws FileNotFoundException if the keystore file does not exist
+	 * @throws IOException if there is an I/O or format problem with the keystore data, if a password is required but not given, or if the given password was incorrect. If the error is due to a wrong password, the cause of the IOException should be an UnrecoverableKeyException
+	 * @throws KeyManagementException if SSLContext.init fails
+	 * @throws UnrecoverableKeyException if the key cannot be recovered (e.g. the given password is wrong).
+	 */
+	public boolean connectSecure(int timeout, File keystoreFile, char [] password) throws KeyManagementException, UnrecoverableKeyException, KeyStoreException, NoSuchAlgorithmException, CertificateException, FileNotFoundException, IOException {
+		TCPSecureSocket socket = new TCPSecureSocket(address, BUFFER_SIZE);
+		socket.setupEncryption(keystoreFile, password);
+		return finishConnection(socket, timeout);
+	}
+	
+	private boolean finishConnection(TCPSocket socket, int timeout) {
+		updateStatus(ServerConnectionStatus.CONNECTING, ServerConnectionChangedReason.NONE);
+		try {
+			socket.createConnection();
+			
+			socket.getSocket().setKeepAlive(true);
+			socket.getSocket().setPerformancePreferences(0, 1, 2);
+			socket.getSocket().setTrafficClass(0x10); // Low Delay bit
+			socket.getSocket().setSoLinger(true, 3);
+			socket.startConnection();
+			
+			socket.setCallback(new TCPSocketCallback() {
+				@Override
+				public void onIncomingData(TCPSocket socket, byte[] data) {
+					swgProtocol.addToBuffer(data);
+					while (true) {
+						RawPacket packet = swgProtocol.disassemble();
+						if (packet != null)
+							inboundQueue.offer(packet);
+						else
+							break;
+					}
 				}
-				return false;
-			}
+				@Override
+				public void onDisconnected(TCPSocket socket) { updateStatus(ServerConnectionStatus.DISCONNECTED, ServerConnectionChangedReason.UNKNOWN); }
+				@Override
+				public void onConnected(TCPSocket socket) { updateStatus(ServerConnectionStatus.CONNECTED, ServerConnectionChangedReason.NONE); }
+			});
+			this.socket = socket;
+			waitForConnect(timeout);
+			return true;
+		} catch (IOException e) {
+			Log.e(e);
+			updateStatus(ServerConnectionStatus.DISCONNECTED, getReason(e.getMessage()));
+			socket.disconnect();
 		}
+		return false;
 	}
 	
 	/**
@@ -189,23 +220,10 @@ public class HolocoreSocket {
 	 * @return TRUE if successfully disconnected, FALSE on error
 	 */
 	public boolean disconnect(ServerConnectionChangedReason reason) {
-		synchronized (socketMutex) {
-			if (isDisconnected())
-				return true;
-			if (socket == null)
-				throw new NullPointerException("Socket cannot be null when disconnecting");
-			updateStatus(ServerConnectionStatus.DISCONNECTED, reason);
-			try {
-				if (socket.isOpen()) {
-					socket.write(swgProtocol.assemble(new HoloConnectionStopped(ConnectionStoppedReason.APPLICATION).encode().array()).getBuffer());
-				}
-				socket.close();
-				socket = null;
-				return true;
-			} catch (IOException e) {
-				return false;
-			}
-		}
+		TCPSocket socket = this.socket;
+		if (socket != null)
+			return socket.disconnect();
+		return true;
 	}
 	
 	/**
@@ -215,7 +233,10 @@ public class HolocoreSocket {
 	 * @return TRUE on success, FALSE on failure
 	 */
 	public boolean send(byte [] raw) {
-		return sendRaw(swgProtocol.assemble(raw).getBuffer());
+		TCPSocket socket = this.socket;
+		if (socket != null)
+			return socket.send(swgProtocol.assemble(raw));
+		return false;
 	}
 	
 	/**
@@ -225,15 +246,11 @@ public class HolocoreSocket {
 	 * on error
 	 */
 	public RawPacket receive() {
-		RawPacket packet = null;
-		do {
-			packet = swgProtocol.disassemble();
-			if (packet != null)
-				return packet;
-			readRaw(buffer, -1);
-			swgProtocol.addToBuffer(buffer);
-		} while (!isDisconnected());
-		return null;
+		try {
+			return inboundQueue.take();
+		} catch (InterruptedException e) {
+			return null;
+		}
 	}
 	
 	/**
@@ -241,64 +258,12 @@ public class HolocoreSocket {
 	 * @return TRUE if there is a packet, FALSE otherwise
 	 */
 	public boolean hasPacket() {
-		readRaw(buffer, 1);
-		return swgProtocol.hasPacket();
-	}
-	
-	private boolean sendRaw(ByteBuffer data) {
-		if (isDisconnected())
-			return false;
-		try {
-			synchronized (socketMutex) {
-				while (data.hasRemaining())
-					socket.write(data);
-			}
-			return !data.hasRemaining();
-		} catch (IOException e) {
-			disconnect(ServerConnectionChangedReason.OTHER_SIDE_TERMINATED);
-		}
-		return false;
-	}
-	
-	/**
-	 * Reads data from the socket, returning true if there is data to read
-	 * @param data the buffer to read into
-	 * @param timeout the optional timeout for this operation, -1 for default
-	 * @return TRUE if data has been read, FALSE otherwise
-	 */
-	private boolean readRaw(ByteBuffer data, int timeout) {
-		try {
-			data.position(0);
-			data.limit(data.capacity());
-			
-			int returnTimeout = socket.socket().getSoTimeout();
-			if (timeout != returnTimeout && timeout != -1)
-				socket.socket().setSoTimeout(timeout);
-			int n = socket.read(data);
-			if (timeout != returnTimeout && timeout != -1)
-				socket.socket().setSoTimeout(returnTimeout);
-			
-			if (n < 0) {
-				disconnect(ServerConnectionChangedReason.OTHER_SIDE_TERMINATED);
-			} else {
-				data.flip();
-				return true;
-			}
-		} catch (Exception e) {
-			if (e instanceof AsynchronousCloseException) {
-				disconnect(ServerConnectionChangedReason.SOCKET_CLOSED);
-			} else if (e.getMessage() != null) {
-				disconnect(getReason(e.getMessage()));
-			} else {
-				disconnect(ServerConnectionChangedReason.UNKNOWN);
-			}
-		}
-		return false;
+		return !inboundQueue.isEmpty();
 	}
 	
 	private void waitForConnect(int timeout) throws SocketException {
 		send(new HoloSetProtocolVersion(PROTOCOL).encode().array());
-		socket.socket().setSoTimeout(timeout);
+		socket.getSocket().setSoTimeout(timeout);
 		try {
 			while (isConnecting()) {
 				RawPacket packet = receive();
@@ -309,7 +274,7 @@ public class HolocoreSocket {
 			if (isConnected())
 				send(new HoloConnectionStarted().encode().array());
 		} finally {
-			socket.socket().setSoTimeout(0);
+			socket.getSocket().setSoTimeout(0);
 		}
 	}
 	
@@ -355,6 +320,15 @@ public class HolocoreSocket {
 	
 	public interface StatusChangedCallback {
 		void onConnectionStatusChanged(ServerConnectionStatus oldStatus, ServerConnectionStatus newStatus, ServerConnectionChangedReason reason);
+	}
+	
+	private static UDPServer createUDPServer() {
+		try {
+			return new UDPServer(0);
+		} catch (SocketException e) {
+			Log.e(e);
+		}
+		return null;
 	}
 	
 }

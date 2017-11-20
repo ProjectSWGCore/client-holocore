@@ -1,7 +1,5 @@
 package com.projectswg.connection;
 
-import java.nio.ByteBuffer;
-
 import com.projectswg.common.network.NetBuffer;
 import com.projectswg.common.network.NetBufferStream;
 
@@ -20,13 +18,17 @@ class HolocoreProtocol {
 	}
 	
 	public NetBuffer assemble(byte [] raw) {
-		NetBuffer data = NetBuffer.allocate(raw.length + 4); // large array
-		data.addArrayLarge(raw);
+//		NetBuffer data = NetBuffer.allocate(raw.length + 4); // large array
+//		data.addArrayLarge(raw);
+		NetBuffer data = NetBuffer.allocate(raw.length + 5);
+		data.addByte(0);
+		data.addShort(raw.length);
+		data.addShort(raw.length);
 		data.flip();
 		return data;
 	}
 	
-	public boolean addToBuffer(ByteBuffer data) {
+	public boolean addToBuffer(byte [] data) {
 		synchronized (inboundStream) {
 			inboundStream.write(data);
 			return hasPacket();
@@ -40,7 +42,10 @@ class HolocoreProtocol {
 				inboundStream.rewind();
 				return EMPTY_PACKET;
 			}
-			int messageLength = inboundStream.getInt();
+//			int messageLength = inboundStream.getInt();
+			inboundStream.getByte();
+			int messageLength = inboundStream.getShort();
+			inboundStream.getShort();
 			if (inboundStream.remaining() < messageLength) {
 				inboundStream.rewind();
 				return EMPTY_PACKET;
@@ -55,9 +60,12 @@ class HolocoreProtocol {
 		synchronized (inboundStream) {
 			inboundStream.mark();
 			try {
-				if (inboundStream.remaining() < 4)
+//				if (inboundStream.remaining() < 4)
+				if (inboundStream.remaining() < 5)
 					return false;
-				int messageLength = inboundStream.getInt();
+				inboundStream.getByte();
+				int messageLength = inboundStream.getShort();
+				inboundStream.getShort();
 				return inboundStream.remaining() >= messageLength;
 			} finally {
 				inboundStream.rewind();

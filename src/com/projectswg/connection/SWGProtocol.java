@@ -1,7 +1,5 @@
 package com.projectswg.connection;
 
-import java.nio.ByteBuffer;
-
 import com.projectswg.common.network.NetBuffer;
 import com.projectswg.connection.packets.RawPacket;
 
@@ -21,8 +19,8 @@ class SWGProtocol {
 		return holocore.assemble(packet);
 	}
 	
-	public boolean addToBuffer(ByteBuffer network) {
-		return holocore.addToBuffer(network);
+	public boolean addToBuffer(byte [] data) {
+		return holocore.addToBuffer(data);
 	}
 	
 	public RawPacket disassemble() {
