@@ -24,6 +24,7 @@ class HolocoreProtocol {
 		data.addByte(0);
 		data.addShort(raw.length);
 		data.addShort(raw.length);
+		data.addRawArray(raw);
 		data.flip();
 		return data;
 	}
@@ -37,10 +38,8 @@ class HolocoreProtocol {
 	
 	public byte [] disassemble() {
 		synchronized (inboundStream) {
-			inboundStream.mark();
 //			if (inboundStream.remaining() < 4) {
 			if (inboundStream.remaining() < 5) {
-				inboundStream.rewind();
 				return EMPTY_PACKET;
 			}
 //			int messageLength = inboundStream.getInt();
@@ -59,11 +58,11 @@ class HolocoreProtocol {
 	
 	public boolean hasPacket() {
 		synchronized (inboundStream) {
-			inboundStream.mark();
 			try {
 //				if (inboundStream.remaining() < 4)
 				if (inboundStream.remaining() < 5)
 					return false;
+				inboundStream.mark();
 				inboundStream.getByte();
 				int messageLength = inboundStream.getShort();
 				inboundStream.getShort();
