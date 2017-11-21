@@ -43,6 +43,7 @@ class HolocoreProtocol {
 				return EMPTY_PACKET;
 			}
 //			int messageLength = inboundStream.getInt();
+			inboundStream.mark();
 			inboundStream.getByte();
 			int messageLength = inboundStream.getShort();
 			inboundStream.getShort();
