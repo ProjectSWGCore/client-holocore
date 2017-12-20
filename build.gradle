@@ -1,22 +1,25 @@
-apply plugin: 'java'
-
-sourceSets {
-    main {
-        java {
-            srcDirs = ['src']
-        }
-        resources {
-            srcDirs = ['src']
-        }
-    }
+plugins {
+	id 'java'
+	id 'idea'
 }
 
-dependencies {
-	compile project(':PSWGCommon')
-	compile fileTree(dir: 'lib', include: ['*.jar'])
+sourceSets {
+	main {
+		java {
+			srcDir 'src'
+		}
+	}
 }
 
 jar {
 	from sourceSets.main.allSource
-	archiveName = "ClientHolocore.jar"
+	archiveName = "PSWGCommon.jar"
+}
+
+task wrapper(type: Wrapper) {
+	gradleVersion = "4.4"
+}
+
+dependencies {
+	compile project(':PSWGCommon')
 }

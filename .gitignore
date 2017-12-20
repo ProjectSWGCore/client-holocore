@@ -1,5 +1,11 @@
-.gradle/
-.settings/
-bin/
-build/
-doc/
+.settings
+
+# IDE-based
+Client Holocore.iml
+out
+.idea
+
+# Gradle
+.gradle
+gradle
+gradlew*
