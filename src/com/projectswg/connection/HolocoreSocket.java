@@ -1,5 +1,15 @@
 package com.projectswg.connection;
 
+import com.projectswg.common.debug.Log;
+import com.projectswg.common.network.NetBuffer;
+import com.projectswg.common.network.TCPSocket;
+import com.projectswg.common.network.TCPSocket.TCPSocketCallback;
+import com.projectswg.common.network.packets.swg.holo.HoloConnectionStarted;
+import com.projectswg.common.network.packets.swg.holo.HoloConnectionStopped;
+import com.projectswg.common.network.packets.swg.holo.HoloSetProtocolVersion;
+import com.projectswg.connection.UDPServer.UDPPacket;
+import com.projectswg.connection.packets.RawPacket;
+
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -16,19 +26,8 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicReference;
 
-import com.projectswg.common.debug.Log;
-import com.projectswg.common.network.NetBuffer;
-import com.projectswg.common.network.TCPSocket;
-import com.projectswg.common.network.TCPSocket.TCPSocketCallback;
-import com.projectswg.common.network.packets.swg.holo.HoloConnectionStarted;
-import com.projectswg.common.network.packets.swg.holo.HoloConnectionStopped;
-import com.projectswg.common.network.packets.swg.holo.HoloSetProtocolVersion;
-import com.projectswg.connection.UDPServer.UDPPacket;
-import com.projectswg.connection.packets.RawPacket;
-
 public class HolocoreSocket {
 	
-	private static final String PROTOCOL = "2016-04-13";
 	private static final int BUFFER_SIZE = 128 * 1024;
 	
 	private final SWGProtocol swgProtocol;
@@ -261,7 +260,7 @@ public class HolocoreSocket {
 	}
 	
 	private void waitForConnect(int timeout) throws SocketException {
-		send(new HoloSetProtocolVersion(PROTOCOL).encode().array());
+		send(new HoloSetProtocolVersion(HolocoreProtocol.VERSION).encode().array());
 		socket.getSocket().setSoTimeout(timeout);
 		try {
 			while (isConnecting()) {

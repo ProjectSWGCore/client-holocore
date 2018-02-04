@@ -5,6 +5,8 @@ import com.projectswg.common.network.NetBufferStream;
 
 class HolocoreProtocol {
 	
+	public static final String VERSION = "2018-02-04";
+	
 	private static final byte [] EMPTY_PACKET = new byte[0];
 	
 	private final NetBufferStream inboundStream;
@@ -18,13 +20,8 @@ class HolocoreProtocol {
 	}
 	
 	public NetBuffer assemble(byte [] raw) {
-//		NetBuffer data = NetBuffer.allocate(raw.length + 4); // large array
-//		data.addArrayLarge(raw);
-		NetBuffer data = NetBuffer.allocate(raw.length + 5);
-		data.addByte(0);
-		data.addShort(raw.length);
-		data.addShort(raw.length);
-		data.addRawArray(raw);
+		NetBuffer data = NetBuffer.allocate(raw.length + 4); // large array
+		data.addArrayLarge(raw);
 		data.flip();
 		return data;
 	}
@@ -38,15 +35,11 @@ class HolocoreProtocol {
 	
 	public byte [] disassemble() {
 		synchronized (inboundStream) {
-//			if (inboundStream.remaining() < 4) {
-			if (inboundStream.remaining() < 5) {
+			if (inboundStream.remaining() < 4) {
 				return EMPTY_PACKET;
 			}
-//			int messageLength = inboundStream.getInt();
 			inboundStream.mark();
-			inboundStream.getByte();
-			int messageLength = inboundStream.getShort();
-			inboundStream.getShort();
+			int messageLength = inboundStream.getInt();
 			if (inboundStream.remaining() < messageLength) {
 				inboundStream.rewind();
 				return EMPTY_PACKET;
@@ -59,14 +52,11 @@ class HolocoreProtocol {
 	
 	public boolean hasPacket() {
 		synchronized (inboundStream) {
+			if (inboundStream.remaining() < 4)
+				return false;
+			inboundStream.mark();
 			try {
-//				if (inboundStream.remaining() < 4)
-				if (inboundStream.remaining() < 5)
-					return false;
-				inboundStream.mark();
-				inboundStream.getByte();
-				int messageLength = inboundStream.getShort();
-				inboundStream.getShort();
+				int messageLength = inboundStream.getInt();
 				return inboundStream.remaining() >= messageLength;
 			} finally {
 				inboundStream.rewind();
