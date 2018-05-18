@@ -1,29 +1,24 @@
 package com.projectswg.connection;
 
-import com.projectswg.common.debug.Log;
 import com.projectswg.common.network.NetBuffer;
-import com.projectswg.common.network.TCPSocket;
-import com.projectswg.common.network.TCPSocket.TCPSocketCallback;
 import com.projectswg.common.network.packets.swg.holo.HoloConnectionStarted;
 import com.projectswg.common.network.packets.swg.holo.HoloConnectionStopped;
 import com.projectswg.common.network.packets.swg.holo.HoloSetProtocolVersion;
-import com.projectswg.connection.UDPServer.UDPPacket;
 import com.projectswg.connection.packets.RawPacket;
+import me.joshlarson.jlcommon.log.Log;
+import me.joshlarson.jlcommon.network.TCPSocket;
+import me.joshlarson.jlcommon.network.TCPSocket.TCPSocketCallback;
+import me.joshlarson.jlcommon.network.UDPServer;
 
-import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.net.DatagramPacket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
-import java.security.KeyManagementException;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
-import java.security.UnrecoverableKeyException;
-import java.security.cert.CertificateException;
 import java.util.Locale;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class HolocoreSocket {
@@ -33,6 +28,7 @@ public class HolocoreSocket {
 	private final SWGProtocol swgProtocol;
 	private final AtomicReference<ServerConnectionStatus> status;
 	private final UDPServer udpServer;
+	private final BlockingQueue<DatagramPacket> udpInboundQueue;
 	private final BlockingQueue<RawPacket> inboundQueue;
 	
 	private TCPSocket socket;
@@ -42,9 +38,10 @@ public class HolocoreSocket {
 	public HolocoreSocket(InetAddress addr, int port) {
 		this.swgProtocol = new SWGProtocol();
 		this.status = new AtomicReference<>(ServerConnectionStatus.DISCONNECTED);
+		this.udpInboundQueue = new LinkedBlockingQueue<>();
+		this.inboundQueue = new LinkedBlockingQueue<>();
 		this.udpServer = createUDPServer();
 		this.socket = null;
-		this.inboundQueue = new LinkedBlockingQueue<>();
 		this.callback = null;
 		this.address = new InetSocketAddress(addr, port);
 	}
@@ -129,13 +126,17 @@ public class HolocoreSocket {
 	 */
 	public String getServerStatus(long timeout) {
 		udpServer.send(address, new byte[]{1});
-		udpServer.waitForPacket(timeout);
-		UDPPacket packet = udpServer.receive();
-		if (packet == null)
-			return "OFFLINE";
-		NetBuffer data = NetBuffer.wrap(packet.getData());
-		data.getByte();
-		return data.getAscii();
+		try {
+			DatagramPacket packet = udpInboundQueue.poll(timeout, TimeUnit.MILLISECONDS);
+			if (packet == null)
+				return "OFFLINE";
+			NetBuffer data = NetBuffer.wrap(packet.getData());
+			data.getByte();
+			return data.getAscii();
+		} catch (InterruptedException e) {
+			Log.w("Interrupted while waiting for server status response");
+			return "UNKNOWN";
+		}
 	}
 	
 	/**
@@ -147,28 +148,6 @@ public class HolocoreSocket {
 	 */
 	public boolean connect(int timeout) {
 		TCPSocket socket = new TCPSocket(address, BUFFER_SIZE);
-		return finishConnection(socket, timeout);
-	}
-	
-	/**
-	 * Attempts to connect to the remote server securely. This call is a blocking function that will not
-	 * return until it has either successfully connected or has failed. It starts by initializing a
-	 * TCP connection, then initializes the Holocore connection, then returns.
-	 * @param timeout the timeout for the connect call
-	 * @param keystoreFile the keystore file
-	 * @param password the password for the keystore
-	 * @return TRUE if successful and connected, FALSE on error
-	 * @throws KeyStoreException if KeyManagerFactory.init or TrustManagerFactory.init fails
-	 * @throws NoSuchAlgorithmException if the algorithm for the keystore or key manager could not be found
-	 * @throws CertificateException if any of the certificates in the keystore could not be loaded
-	 * @throws FileNotFoundException if the keystore file does not exist
-	 * @throws IOException if there is an I/O or format problem with the keystore data, if a password is required but not given, or if the given password was incorrect. If the error is due to a wrong password, the cause of the IOException should be an UnrecoverableKeyException
-	 * @throws KeyManagementException if SSLContext.init fails
-	 * @throws UnrecoverableKeyException if the key cannot be recovered (e.g. the given password is wrong).
-	 */
-	public boolean connectSecure(int timeout, File keystoreFile, char [] password) throws KeyManagementException, UnrecoverableKeyException, KeyStoreException, NoSuchAlgorithmException, CertificateException, FileNotFoundException, IOException {
-		TCPSocket socket = new TCPSocket(address, BUFFER_SIZE);
-//		socket.setupEncryption(keystoreFile, password);
 		return finishConnection(socket, timeout);
 	}
 	
@@ -233,7 +212,7 @@ public class HolocoreSocket {
 	public boolean send(byte [] raw) {
 		TCPSocket socket = this.socket;
 		if (socket != null)
-			return socket.send(swgProtocol.assemble(raw));
+			return socket.send(swgProtocol.assemble(raw).getBuffer());
 		return false;
 	}
 	
@@ -320,9 +299,11 @@ public class HolocoreSocket {
 		void onConnectionStatusChanged(ServerConnectionStatus oldStatus, ServerConnectionStatus newStatus, ServerConnectionChangedReason reason);
 	}
 	
-	private static UDPServer createUDPServer() {
+	private UDPServer createUDPServer() {
 		try {
-			return new UDPServer(0);
+			UDPServer server = new UDPServer(new InetSocketAddress(0), 1500, udpInboundQueue::offer);
+			server.bind();
+			return server;
 		} catch (SocketException e) {
 			Log.e(e);
 		}

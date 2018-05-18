@@ -1,6 +1,3 @@
 [submodule "pswgcommon"]
 	path = pswgcommon
 	url = git@bitbucket.org:projectswg/pswgcommon.git
-[submodule "PSWGCommon"]
-	path = PSWGCommon
-	url = git@bitbucket.org:projectswg/pswgcommon.git
