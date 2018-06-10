@@ -1,7 +1,6 @@
 package com.projectswg.connection;
 
 import com.projectswg.common.network.NetBuffer;
-import com.projectswg.connection.packets.RawPacket;
 
 class SWGProtocol {
 	

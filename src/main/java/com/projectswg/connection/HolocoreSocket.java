@@ -4,7 +4,6 @@ import com.projectswg.common.network.NetBuffer;
 import com.projectswg.common.network.packets.swg.holo.HoloConnectionStarted;
 import com.projectswg.common.network.packets.swg.holo.HoloConnectionStopped;
 import com.projectswg.common.network.packets.swg.holo.HoloSetProtocolVersion;
-import com.projectswg.connection.packets.RawPacket;
 import me.joshlarson.jlcommon.log.Log;
 import me.joshlarson.jlcommon.network.TCPSocket;
 import me.joshlarson.jlcommon.network.TCPSocket.TCPSocketCallback;
@@ -125,6 +124,14 @@ public class HolocoreSocket {
 	 * @return the server status as a string
 	 */
 	public String getServerStatus(long timeout) {
+		Log.t("Requesting server status from %s", address);
+		if (!udpServer.isRunning()) {
+			try {
+				udpServer.bind();
+			} catch (SocketException e) {
+				return "UNKNOWN";
+			}
+		}
 		udpServer.send(address, new byte[]{1});
 		try {
 			DatagramPacket packet = udpInboundQueue.poll(timeout, TimeUnit.MILLISECONDS);
@@ -301,7 +308,7 @@ public class HolocoreSocket {
 	
 	private UDPServer createUDPServer() {
 		try {
-			UDPServer server = new UDPServer(new InetSocketAddress(0), 1500, udpInboundQueue::offer);
+			UDPServer server = new UDPServer(new InetSocketAddress(0), 1500, udpInboundQueue::add);
 			server.bind();
 			return server;
 		} catch (SocketException e) {
