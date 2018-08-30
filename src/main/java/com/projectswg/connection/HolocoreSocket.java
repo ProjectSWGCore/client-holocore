@@ -3,6 +3,7 @@ package com.projectswg.connection;
 import com.projectswg.common.network.NetBuffer;
 import com.projectswg.common.network.packets.swg.holo.HoloConnectionStarted;
 import com.projectswg.common.network.packets.swg.holo.HoloConnectionStopped;
+import com.projectswg.common.network.packets.swg.holo.HoloConnectionStopped.ConnectionStoppedReason;
 import com.projectswg.common.network.packets.swg.holo.HoloSetProtocolVersion;
 import me.joshlarson.jlcommon.log.Log;
 import me.joshlarson.jlcommon.network.TCPSocket;
@@ -20,7 +21,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
-public class HolocoreSocket {
+public class HolocoreSocket implements AutoCloseable {
 	
 	private static final int BUFFER_SIZE = 128 * 1024;
 	
@@ -48,9 +49,20 @@ public class HolocoreSocket {
 	/**
 	 * Shuts down any miscellaneous resources--such as the query UDP server
 	 */
-	public void terminate() {
+	public void close() {
 		if (udpServer != null)
 			udpServer.close();
+		udpInboundQueue.clear();
+		
+		disconnect(ConnectionStoppedReason.APPLICATION);
+	}
+	
+	/**
+	 * Shuts down any miscellaneous resources--such as the query UDP server
+	 */
+	@Deprecated
+	public void terminate() {
+		close();
 	}
 	
 	/**
@@ -164,8 +176,7 @@ public class HolocoreSocket {
 			socket.createConnection();
 			
 			socket.getSocket().setKeepAlive(true);
-			socket.getSocket().setPerformancePreferences(0, 1, 2);
-			socket.getSocket().setTrafficClass(0x10); // Low Delay bit
+			socket.getSocket().setPerformancePreferences(0, 2, 1);
 			socket.getSocket().setSoLinger(true, 3);
 			socket.startConnection();
 			
@@ -182,7 +193,7 @@ public class HolocoreSocket {
 					}
 				}
 				@Override
-				public void onDisconnected(TCPSocket socket) { updateStatus(ServerConnectionStatus.DISCONNECTED, ServerConnectionChangedReason.UNKNOWN); }
+				public void onDisconnected(TCPSocket socket) { updateStatus(ServerConnectionStatus.DISCONNECTED, ServerConnectionChangedReason.OTHER_SIDE_TERMINATED); }
 				@Override
 				public void onConnected(TCPSocket socket) { updateStatus(ServerConnectionStatus.CONNECTED, ServerConnectionChangedReason.NONE); }
 			});
@@ -203,10 +214,13 @@ public class HolocoreSocket {
 	 * @param reason the reason for disconnecting
 	 * @return TRUE if successfully disconnected, FALSE on error
 	 */
-	public boolean disconnect(ServerConnectionChangedReason reason) {
+	public boolean disconnect(ConnectionStoppedReason reason) {
 		TCPSocket socket = this.socket;
-		if (socket != null)
+		if (socket != null) {
+			socket.send(new HoloConnectionStopped(reason).encode().array());
 			return socket.disconnect();
+		}
+		inboundQueue.clear();
 		return true;
 	}
 	
@@ -268,14 +282,7 @@ public class HolocoreSocket {
 		} else if (crc == HoloConnectionStopped.CRC) {
 			HoloConnectionStopped packet = new HoloConnectionStopped();
 			packet.decode(NetBuffer.wrap(raw));
-			switch (packet.getReason()) {
-				case INVALID_PROTOCOL:
-					disconnect(ServerConnectionChangedReason.INVALID_PROTOCOL);
-					break;
-				default:
-					disconnect(ServerConnectionChangedReason.NONE);
-					break;
-			}
+			disconnect(packet.getReason());
 		}
 	}
 	
