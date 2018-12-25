@@ -18,7 +18,7 @@
  *                                                                                 *
  ***********************************************************************************/
 
-package com.projectswg.connection;
+package com.projectswg.holocore.client;
 
 public class RawPacket {
 	

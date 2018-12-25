@@ -1,20 +1,27 @@
-package com.projectswg.connection;
+package com.projectswg.holocore.client;
 
 import com.projectswg.common.network.NetBuffer;
 import com.projectswg.common.network.packets.swg.holo.HoloConnectionStarted;
 import com.projectswg.common.network.packets.swg.holo.HoloConnectionStopped;
 import com.projectswg.common.network.packets.swg.holo.HoloConnectionStopped.ConnectionStoppedReason;
 import com.projectswg.common.network.packets.swg.holo.HoloSetProtocolVersion;
+import me.joshlarson.jlcommon.concurrency.Delay;
 import me.joshlarson.jlcommon.log.Log;
+import me.joshlarson.jlcommon.network.SecureTCPSocket;
 import me.joshlarson.jlcommon.network.TCPSocket;
 import me.joshlarson.jlcommon.network.TCPSocket.TCPSocketCallback;
 import me.joshlarson.jlcommon.network.UDPServer;
 
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 import java.io.IOException;
-import java.net.DatagramPacket;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.SocketException;
+import java.net.*;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
 import java.util.Locale;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -30,16 +37,22 @@ public class HolocoreSocket implements AutoCloseable {
 	private final UDPServer udpServer;
 	private final BlockingQueue<DatagramPacket> udpInboundQueue;
 	private final BlockingQueue<RawPacket> inboundQueue;
+	private final boolean verifyServer;
 	
-	private TCPSocket socket;
+	private SecureTCPSocket socket;
 	private StatusChangedCallback callback;
 	private InetSocketAddress address;
 	
 	public HolocoreSocket(InetAddress addr, int port) {
+		this(addr, port, true);
+	}
+	
+	public HolocoreSocket(InetAddress addr, int port, boolean verifyServer) {
 		this.swgProtocol = new SWGProtocol();
 		this.status = new AtomicReference<>(ServerConnectionStatus.DISCONNECTED);
 		this.udpInboundQueue = new LinkedBlockingQueue<>();
 		this.inboundQueue = new LinkedBlockingQueue<>();
+		this.verifyServer = verifyServer;
 		this.udpServer = createUDPServer();
 		this.socket = null;
 		this.callback = null;
@@ -55,6 +68,10 @@ public class HolocoreSocket implements AutoCloseable {
 		udpInboundQueue.clear();
 		
 		disconnect(ConnectionStoppedReason.APPLICATION);
+		
+		TCPSocket socket = this.socket;
+		if (socket != null)
+			socket.disconnect();
 	}
 	
 	/**
@@ -166,19 +183,30 @@ public class HolocoreSocket implements AutoCloseable {
 	 * @return TRUE if successful and connected, FALSE on error
 	 */
 	public boolean connect(int timeout) {
-		TCPSocket socket = new TCPSocket(address, BUFFER_SIZE);
+		SecureTCPSocket socket = new SecureTCPSocket(address, BUFFER_SIZE);
+		try {
+			SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
+			TrustManager [] tm = verifyServer ? null : new TrustManager[]{new TrustingTrustManager()};
+			sslContext.init(null, tm, new SecureRandom());
+			socket.setSocketFactory(sslContext.getSocketFactory());
+		} catch (NoSuchAlgorithmException | KeyManagementException e) {
+			Log.w("Failed to initialize TLSv1.3");
+		}
+		inboundQueue.clear();
 		return finishConnection(socket, timeout);
 	}
 	
-	private boolean finishConnection(TCPSocket socket, int timeout) {
+	private boolean finishConnection(SecureTCPSocket socket, int timeout) {
 		updateStatus(ServerConnectionStatus.CONNECTING, ServerConnectionChangedReason.NONE);
 		try {
 			socket.createConnection();
 			
-			socket.getSocket().setKeepAlive(true);
-			socket.getSocket().setPerformancePreferences(0, 2, 1);
-			socket.getSocket().setSoLinger(true, 3);
-			socket.startConnection();
+			{
+				SSLSocket sslSocket = (SSLSocket) socket.getSocket();
+				sslSocket.setKeepAlive(false);
+				sslSocket.setPerformancePreferences(0, 2, 1);
+				sslSocket.setSoLinger(false, 0);
+			}
 			
 			socket.setCallback(new TCPSocketCallback() {
 				@Override
@@ -186,9 +214,10 @@ public class HolocoreSocket implements AutoCloseable {
 					swgProtocol.addToBuffer(data);
 					while (true) {
 						RawPacket packet = swgProtocol.disassemble();
-						if (packet != null)
+						if (packet != null) {
+							handlePacket(packet.getCrc(), packet.getData());
 							inboundQueue.offer(packet);
-						else
+						} else
 							break;
 					}
 				}
@@ -201,7 +230,6 @@ public class HolocoreSocket implements AutoCloseable {
 			waitForConnect(timeout);
 			return true;
 		} catch (IOException e) {
-			Log.e(e);
 			updateStatus(ServerConnectionStatus.DISCONNECTED, getReason(e.getMessage()));
 			socket.disconnect();
 		}
@@ -215,13 +243,21 @@ public class HolocoreSocket implements AutoCloseable {
 	 * @return TRUE if successfully disconnected, FALSE on error
 	 */
 	public boolean disconnect(ConnectionStoppedReason reason) {
+		ServerConnectionStatus status = this.status.get();
 		TCPSocket socket = this.socket;
-		if (socket != null) {
-			socket.send(new HoloConnectionStopped(reason).encode().array());
-			return socket.disconnect();
+		if (socket == null)
+			return true;
+		switch (status) {
+			case CONNECTING:
+			case DISCONNECTING:
+			case DISCONNECTED:
+			default:
+				return socket.disconnect();
+			case CONNECTED:
+				updateStatus(ServerConnectionStatus.DISCONNECTING, ServerConnectionChangedReason.CLIENT_DISCONNECT);
+				send(new HoloConnectionStopped(reason).encode().array());
+				return true;
 		}
-		inboundQueue.clear();
-		return true;
 	}
 	
 	/**
@@ -259,20 +295,17 @@ public class HolocoreSocket implements AutoCloseable {
 		return !inboundQueue.isEmpty();
 	}
 	
-	private void waitForConnect(int timeout) throws SocketException {
-		send(new HoloSetProtocolVersion(HolocoreProtocol.VERSION).encode().array());
-		socket.getSocket().setSoTimeout(timeout);
+	private void waitForConnect(int timeout) throws IOException {
+		Socket rawSocket = socket.getSocket();
+		rawSocket.setSoTimeout(timeout);
 		try {
-			while (isConnecting()) {
-				RawPacket packet = receive();
-				if (packet == null)
-					continue;
-				handlePacket(packet.getCrc(), packet.getData());
+			socket.startConnection();
+			send(new HoloSetProtocolVersion(HolocoreProtocol.VERSION).encode().array());
+			while (isConnecting() && !Delay.isInterrupted()) {
+				Delay.sleepMilli(50);
 			}
-			if (isConnected())
-				send(new HoloConnectionStarted().encode().array());
 		} finally {
-			socket.getSocket().setSoTimeout(0);
+			rawSocket.setSoTimeout(0); // Reset back to how it was before the function
 		}
 	}
 	
@@ -282,6 +315,7 @@ public class HolocoreSocket implements AutoCloseable {
 		} else if (crc == HoloConnectionStopped.CRC) {
 			HoloConnectionStopped packet = new HoloConnectionStopped();
 			packet.decode(NetBuffer.wrap(raw));
+			updateStatus(ServerConnectionStatus.DISCONNECTING, ServerConnectionChangedReason.OTHER_SIDE_TERMINATED);
 			disconnect(packet.getReason());
 		}
 	}
@@ -324,4 +358,15 @@ public class HolocoreSocket implements AutoCloseable {
 		return null;
 	}
 	
+	private static class TrustingTrustManager implements X509TrustManager {
+		
+		@Override
+		public void checkClientTrusted(X509Certificate[] chain, String authType) { }
+		
+		@Override
+		public void checkServerTrusted(X509Certificate[] chain, String authType) { }
+		
+		@Override
+		public X509Certificate[] getAcceptedIssuers() { return null; }
+	}
 }

@@ -1,4 +1,4 @@
-package com.projectswg.connection;
+package com.projectswg.holocore.client;
 
 import com.projectswg.common.network.NetBuffer;
 import com.projectswg.common.network.NetBufferStream;
