@@ -3,6 +3,8 @@ package com.projectswg.holocore.client;
 import com.projectswg.common.network.NetBuffer;
 import com.projectswg.common.network.NetBufferStream;
 
+import java.nio.ByteBuffer;
+
 class HolocoreProtocol {
 	
 	public static final String VERSION = "2018-02-04";
@@ -26,7 +28,7 @@ class HolocoreProtocol {
 		return data;
 	}
 	
-	public boolean addToBuffer(byte [] data) {
+	public boolean addToBuffer(ByteBuffer data) {
 		synchronized (inboundStream) {
 			inboundStream.write(data);
 			return hasPacket();

@@ -2,6 +2,8 @@ package com.projectswg.holocore.client;
 
 import com.projectswg.common.network.NetBuffer;
 
+import java.nio.ByteBuffer;
+
 class SWGProtocol {
 	
 	private final HolocoreProtocol holocore;
@@ -18,7 +20,7 @@ class SWGProtocol {
 		return holocore.assemble(packet);
 	}
 	
-	public boolean addToBuffer(byte [] data) {
+	public boolean addToBuffer(ByteBuffer data) {
 		return holocore.addToBuffer(data);
 	}
 	

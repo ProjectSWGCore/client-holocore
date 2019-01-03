@@ -7,6 +7,7 @@ import com.projectswg.common.network.packets.swg.holo.HoloConnectionStopped.Conn
 import com.projectswg.common.network.packets.swg.holo.HoloSetProtocolVersion;
 import me.joshlarson.jlcommon.concurrency.Delay;
 import me.joshlarson.jlcommon.log.Log;
+import me.joshlarson.jlcommon.network.SSLEngineWrapper.SSLClosedException;
 import me.joshlarson.jlcommon.network.SecureTCPSocket;
 import me.joshlarson.jlcommon.network.TCPSocket;
 import me.joshlarson.jlcommon.network.TCPSocket.TCPSocketCallback;
@@ -18,6 +19,8 @@ import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 import java.io.IOException;
 import java.net.*;
+import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
@@ -29,8 +32,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class HolocoreSocket implements AutoCloseable {
-	
-	private static final int BUFFER_SIZE = 128 * 1024;
 	
 	private final SWGProtocol swgProtocol;
 	private final AtomicReference<ServerConnectionStatus> status;
@@ -183,14 +184,13 @@ public class HolocoreSocket implements AutoCloseable {
 	 * @return TRUE if successful and connected, FALSE on error
 	 */
 	public boolean connect(int timeout) {
-		SecureTCPSocket socket = new SecureTCPSocket(address, BUFFER_SIZE);
 		try {
 			SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
 			TrustManager [] tm = verifyServer ? null : new TrustManager[]{new TrustingTrustManager()};
 			sslContext.init(null, tm, new SecureRandom());
-			socket.setSocketFactory(sslContext.getSocketFactory());
+			socket = new SecureTCPSocket(address, sslContext, Runnable::run);
 		} catch (NoSuchAlgorithmException | KeyManagementException e) {
-			Log.w("Failed to initialize TLSv1.3");
+			throw new RuntimeException(e);
 		}
 		inboundQueue.clear();
 		return finishConnection(socket, timeout);
@@ -201,16 +201,9 @@ public class HolocoreSocket implements AutoCloseable {
 		try {
 			socket.createConnection();
 			
-			{
-				SSLSocket sslSocket = (SSLSocket) socket.getSocket();
-				sslSocket.setKeepAlive(false);
-				sslSocket.setPerformancePreferences(0, 2, 1);
-				sslSocket.setSoLinger(false, 0);
-			}
-			
 			socket.setCallback(new TCPSocketCallback() {
 				@Override
-				public void onIncomingData(TCPSocket socket, byte[] data) {
+				public void onIncomingData(TCPSocket socket, ByteBuffer data) {
 					swgProtocol.addToBuffer(data);
 					while (true) {
 						RawPacket packet = swgProtocol.disassemble();
@@ -220,6 +213,12 @@ public class HolocoreSocket implements AutoCloseable {
 						} else
 							break;
 					}
+				}
+				@Override
+				public void onError(TCPSocket socket, Throwable t) {
+					if (t instanceof ClosedChannelException || t instanceof SSLClosedException)
+						return;
+					Log.e(t);
 				}
 				@Override
 				public void onDisconnected(TCPSocket socket) { updateStatus(ServerConnectionStatus.DISCONNECTED, ServerConnectionChangedReason.OTHER_SIDE_TERMINATED); }
@@ -269,7 +268,7 @@ public class HolocoreSocket implements AutoCloseable {
 	public boolean send(byte [] raw) {
 		TCPSocket socket = this.socket;
 		if (socket != null)
-			return socket.send(swgProtocol.assemble(raw).getBuffer());
+			return socket.send(swgProtocol.assemble(raw).getBuffer()) > 0;
 		return false;
 	}
 	
