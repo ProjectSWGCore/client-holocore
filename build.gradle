@@ -12,6 +12,8 @@ repositories {
 
 dependencies {
 	compile project(':pswgcommon')
+	compile group: 'me.joshlarson', name: 'jlcommon-network', version: '1.0.0'
+	
 	testCompile 'junit:junit:4.12'
 }
 
