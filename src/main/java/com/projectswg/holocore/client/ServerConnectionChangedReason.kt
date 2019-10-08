@@ -1,6 +1,6 @@
-package com.projectswg.holocore.client;
+package com.projectswg.holocore.client
 
-public enum ServerConnectionChangedReason {
+enum class ServerConnectionChangedReason {
 	NONE,
 	CLIENT_DISCONNECT,
 	SOCKET_CLOSED,
