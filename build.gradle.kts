@@ -1,12 +1,19 @@
 plugins {
 	idea
 	java
-	id("org.javamodularity.moduleplugin")
 	kotlin("jvm")
 }
 
+val javaVersion: String by ext
+val javaMajorVersion: String by ext
+val kotlinTargetJdk: String by ext
+
+java {
+	modularity.inferModulePath.set(true)
+}
+
 idea {
-	targetVersion = "12.0.1"
+	targetVersion = javaVersion
     module {
         inheritOutputDirs = true
     }
@@ -19,9 +26,11 @@ repositories {
 
 sourceSets {
 	main {
+        java.outputDir = File(java.outputDir.toString().replace("\\${File.separatorChar}java", ""))
+		
 		dependencies {
-			implementation(project(":pswgcommon"))
 			implementation(kotlin("stdlib"))
+			implementation(project(":pswgcommon"))
 			api(group="me.joshlarson", name="jlcommon-network", version="1.0.0")
 		}
 	}
@@ -34,6 +43,6 @@ sourceSets {
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
 	kotlinOptions {
-		jvmTarget = "12"
+		jvmTarget = kotlinTargetJdk
 	}
 }

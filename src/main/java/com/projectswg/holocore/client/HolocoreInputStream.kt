@@ -27,7 +27,7 @@ class HolocoreInputStream(private val stream: InputStream): Closeable {
 					return protocol.disassemble() ?: continue
 			} while (true)
 		}
-		throw AssertionError("unreachable code")
+		throw AssertionError("unreachable")
 	}
 	
 	override fun close() {
